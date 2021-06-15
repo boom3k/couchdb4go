@@ -17,13 +17,14 @@ type CouchDB struct {
 	Request        *http.Request
 }
 
-func NewCouchDB(username, password, serverAddress string, secureSever bool) *CouchDB {
+func Initialize(username, password, serverAddress string, secureSever bool) *CouchDB {
 	database := &CouchDB{}
+	port := 5984
 	httpType := "http://"
 	if secureSever {
 		httpType = "https://"
 	}
-	database.ServerAddress = httpType + serverAddress + ":5984/"
+	database.ServerAddress = httpType + serverAddress + ":" + fmt.Sprint(port) + "/"
 	database.Username = username
 	database.Password = password
 	database.IsSecureServer = secureSever
@@ -70,4 +71,3 @@ func (couchDB *CouchDB) Do() (*http.Response, error) {
 	response.Proto = string(responseBody)
 	return response, nil
 }
-
