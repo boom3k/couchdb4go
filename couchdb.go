@@ -10,15 +10,16 @@ import (
 )
 
 type CouchDB struct {
-	ServerAddress  string
-	Username       string
-	Password       string
-	IsSecureServer bool
-	Request        *http.Request
+	ServerAddress    string
+	Username         string
+	Password         string
+	IsSecureServer   bool
+	ActiveConnection bool
+	Request          *http.Request
 }
 
 // Initialize Creates a new running couchdb object
-func Initialize(username, password, serverAddress string, secureSever bool) (*CouchDB, error) {
+func Initialize(username, password, serverAddress string, secureSever bool) *CouchDB {
 	database := &CouchDB{}
 	port := 5984
 	httpType := "http://"
@@ -29,58 +30,45 @@ func Initialize(username, password, serverAddress string, secureSever bool) (*Co
 	database.Username = username
 	database.Password = password
 	database.IsSecureServer = secureSever
-	return database.VerifyConnection()
+	database.ActiveConnection = database.VerifyConnection()
+	return database
 }
 
-func (c *CouchDB) VerifyConnection() (*CouchDB, error) {
-	url := c.ServerAddress + "_all_dbs"
-	request, err := http.NewRequest("GET", url, nil)
+func (c *CouchDB) SetRequest(method, ask string, body []byte) *CouchDB {
+	request, err := http.NewRequest(strings.ToUpper(method), c.ServerAddress+ask, bytes.NewBuffer(body))
 	if err != nil {
 		log.Println(err.Error())
-		return c, err
+		panic(err)
 	}
-	var httpClient *http.Client
-	response, err := httpClient.Do(request)
-	if err != nil {
-		log.Println(err.Error())
-		return c, err
-	}
+	c.Request = request
+	return c
+}
 
+func (c *CouchDB) VerifyConnection() bool {
+	c.SetRequest("GET", "_all_dbs", nil)
+	response, err := c.Do()
+	if err != nil {
+		log.Println(err.Error())
+		panic(err)
+	}
+	log.Printf("Connection to <%s> [%s]\n", c.ServerAddress, response.Status)
 	if response.StatusCode == 200 {
-		log.Printf("Connection to <%s> [SUCCESS]\n", c.ServerAddress)
-	} else {
-		log.Printf("Connection to <%s> [FAILED] - Error code: (%d)\n", c.ServerAddress, response.StatusCode)
+		return true
 	}
-	return c, nil
-}
-
-func (c *CouchDB) CreateDatabase(databaseName string) (*CouchDB, error) {
-	url := c.ServerAddress + strings.ToLower(databaseName)
-	request, err := http.NewRequest("PUT", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	c.Request = request
-	return c, nil
-}
-
-func (c *CouchDB) CreateDocument(database string, documentData []byte) (*CouchDB, error) {
-	url := c.ServerAddress + database
-	request, err := http.NewRequest("POST", url, bytes.NewBuffer(documentData))
-	if err != nil {
-		return nil, err
-	}
-	c.Request = request
-	return c, nil
+	return false
 }
 
 // Do Request Handler
 func (c *CouchDB) Do() (*http.Response, error) {
-	log.Println(c.Request.Method + " -> " + fmt.Sprint(c.Request.URL) + " ")
 	c.Request.SetBasicAuth(c.Username, c.Password)
 	c.Request.Header.Set("Content-Type", "application/json; charset=UTF-8")
+
+	reader := new(bytes.Buffer)
+	reader.ReadFrom(c.Request.Body)
+	log.Println(c.Request.Method + ": " + reader.String() + " -> " + fmt.Sprint(c.Request.URL))
 	httpClient := &http.Client{}
 	response, err := httpClient.Do(c.Request)
+	c.Request = nil
 	if err != nil {
 		log.Println(err.Error())
 		panic(err)
@@ -90,14 +78,14 @@ func (c *CouchDB) Do() (*http.Response, error) {
 		log.Println(err.Error())
 		return response, err
 	}
-	c.Request = nil
+
 	response.Proto = string(responseBody)
 	return response, nil
 }
 
 // ExecuteURL For testing db calls
 func ExecuteURL(method, username, password, url string, body []byte) (*http.Response, error) {
-	var httpClient *http.Client
+	var httpClient http.Client
 	request, err := http.NewRequest(method, url, bytes.NewBuffer(body))
 	if err != nil {
 		log.Println(err.Error())
@@ -118,4 +106,16 @@ func ExecuteURL(method, username, password, url string, body []byte) (*http.Resp
 	}
 	response.Proto = string(responseBody)
 	return response, nil
+}
+
+/*Insert Methods*/
+func (c *CouchDB) CreateDatabase(databaseName string) (*http.Response, error) {
+	c.SetRequest("PUT", databaseName, nil)
+	return c.Do()
+}
+
+func (c *CouchDB) CreateDocument(database string, jsonData []byte) (*http.Response, error) {
+
+	c.SetRequest("POST", database, jsonData)
+	return c.Do()
 }
