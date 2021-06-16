@@ -45,7 +45,7 @@ func (c *CouchDB) SetRequest(method, ask string, body []byte) *CouchDB {
 }
 
 func (c *CouchDB) VerifyConnection() bool {
-	c.SetRequest("GET", "_all_dbs", nil)
+	c.SetRequest("GET", "", nil)
 	response, err := c.Do()
 	if err != nil {
 		log.Println(err.Error())
@@ -109,8 +109,8 @@ func ExecuteURL(method, username, password, url string, body []byte) (*http.Resp
 }
 
 /*Insert Methods*/
-func (c *CouchDB) CreateDatabase(databaseName string) (*http.Response, error) {
-	c.SetRequest("PUT", databaseName, nil)
+func (c *CouchDB) CreateDatabase(databaseName string, isPartitioned bool) (*http.Response, error) {
+	c.SetRequest("PUT", databaseName+"?partitioned="+fmt.Sprint(isPartitioned), nil)
 	return c.Do()
 }
 
