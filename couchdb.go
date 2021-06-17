@@ -1,4 +1,4 @@
-package main
+package couchdb4go
 
 import (
 	"bytes"
@@ -11,35 +11,6 @@ import (
 	"os"
 	"strings"
 )
-
-func main() {
-	type User struct {
-		Id   string `json:"_id"`
-		Name string `json:"name"`
-		Age  int    `json:"age"`
-	}
-	//Test Connection
-	couch := NewSession("root", "boomer", "10.0.0.51", false)
-
-	//Create a database
-	couch.CreateDatabase("dev", true)
-	database, err := couch.Get("dev")
-	if err != nil {
-		log.Println(err.Error())
-		panic(err)
-	}
-
-	//Insert user into database
-	id := "user:rhenderson"
-	user := &User{Id: id, Age: 0, Name: "Ramel"}
-	documentData, _ := json.Marshal(user)
-	database.Insert(documentData)
-
-	//Update user in database
-	user.Age = 35
-	documentData, _ = json.Marshal(user)
-	database.Update(id, documentData)
-}
 
 func ExecuteURL(method, username, password, url string, body []byte) (*http.Response, error) {
 	var httpClient http.Client
