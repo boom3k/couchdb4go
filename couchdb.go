@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -17,29 +18,27 @@ func main() {
 		Name string `json:"name"`
 		Age  int    `json:"age"`
 	}
+	//Test Connection
 	couch := NewSession("root", "boomer", "10.0.0.51", false)
-	database, err := couch.GetDatabase("dev")
+
+	//Create a database
+	couch.CreateDatabase("dev", true)
+	database, err := couch.Get("dev")
 	if err != nil {
 		log.Println(err.Error())
 		panic(err)
 	}
 
-	userData, err := json.Marshal(&User{Id: "user:rhenderson", Age: 0})
-	database.UpdateDocument(userData)
-	/*userData, err := json.Marshal(&User{Id: "user:rhenderson", Name: "Ramel", Age: 35})
-	if err != nil {
-		log.Println(err.Error())
-		panic(err)
-	}
+	//Insert user into database
+	id := "user:rhenderson"
+	user := &User{Id: id, Age: 0, Name: "Ramel"}
+	documentData, _ := json.Marshal(user)
+	database.Insert(documentData)
 
-	document, err := database.CreateDocument(userData)
-	if err != nil {
-		log.Println(err.Error())
-		panic(err)
-	}
-	u := &User{}
-	mapstructure.Decode(document, &u)
-	fmt.Sprint(u)*/
+	//Update user in database
+	user.Age = 35
+	documentData, _ = json.Marshal(user)
+	database.Update(id, documentData)
 }
 
 func ExecuteURL(method, username, password, url string, body []byte) (*http.Response, error) {
@@ -72,7 +71,7 @@ type Session struct {
 	Password         string
 	IsSecureServer   bool
 	ActiveConnection bool
-	RequestHandler   *http.Request
+	Request          *http.Request
 }
 
 func NewSession(username, password, serverAddress string, secureSever bool) *Session {
@@ -93,7 +92,7 @@ func NewSession(username, password, serverAddress string, secureSever bool) *Ses
 		panic(err)
 	}
 	log.Printf("Connection to <%s> [%s]\n", session.ServerAddress, response.Status)
-	if response.StatusCode == 200 {
+	if response.StatusCode < 205 {
 		session.ActiveConnection = true
 	}
 	return session
@@ -104,7 +103,7 @@ type Database struct {
 	Session *Session
 }
 
-func (session *Session) GetDatabase(databaseName string) (*Database, error) {
+func (session *Session) Get(databaseName string) (*Database, error) {
 	database := &Database{Name: databaseName, Session: session}
 	response, err := ExecuteURL("GET", session.Username, session.Password, session.ServerAddress+database.Name, nil)
 	if err != nil {
@@ -112,12 +111,24 @@ func (session *Session) GetDatabase(databaseName string) (*Database, error) {
 		return nil, err
 	}
 
-	if response.StatusCode != 200 {
+	if response.StatusCode > 205 {
 		e := errors.New(response.Status + " - " + response.Request.URL.String())
 		return nil, e
 	}
-
 	return database, nil
+}
+
+func (session *Session) Delete(database *Database) error {
+	response, err := ExecuteURL("DELETE", session.Username, session.Password, session.ServerAddress+database.Name, nil)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	if response.StatusCode > 205 {
+		e := errors.New(response.Status + " - " + response.Request.URL.String())
+		return e
+	}
+	return nil
 }
 
 type Res struct {
@@ -143,24 +154,28 @@ func GetResponse(response *http.Response) *Res {
 	return cr
 }
 
-func (session *Session) ExecuteRequest() (*Res, error) {
-	session.RequestHandler.SetBasicAuth(session.Username, session.Password)
-	session.RequestHandler.Header.Set("Content-Type", "application/json; charset=UTF-8")
+func (session *Session) Do() (*Res, error) {
+	if session.Request == nil {
+		e := errors.New("No session request set @ " + session.ServerAddress)
+		return nil, e
+	}
+	session.Request.SetBasicAuth(session.Username, session.Password)
+	session.Request.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	buffer := new(bytes.Buffer)
-	buffer.ReadFrom(session.RequestHandler.Body)
+	buffer.ReadFrom(session.Request.Body)
 	httpClient := http.Client{}
-	httpResponse, err := httpClient.Do(session.RequestHandler)
+	httpResponse, err := httpClient.Do(session.Request)
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
 	}
-	resultMsg := session.RequestHandler.Method + ": " + buffer.String() + " {" + fmt.Sprint(session.RequestHandler.URL) + "} || Status: " + fmt.Sprint(httpResponse.StatusCode)
+	resultMsg := session.Request.Method + ": " + buffer.String() + " {" + fmt.Sprint(session.Request.URL) + "} || Status: " + fmt.Sprint(httpResponse.StatusCode)
 	response := GetResponse(httpResponse)
 	if response.JsonMap["error"] != nil {
 		resultMsg += " -- " + (response.JsonMap["reason"]).(string)
 	}
 	log.Println(resultMsg)
-	session.RequestHandler = nil
+	session.Request = nil
 	return response, nil
 }
 
@@ -170,12 +185,12 @@ func (session *Session) SetRequest(method, ask string, body []byte) *Session {
 		log.Println(err.Error())
 		panic(err)
 	}
-	session.RequestHandler = request
+	session.Request = request
 	return session
 }
 
 func (session *Session) CreateDatabase(databaseName string, isPartitioned bool) (*Database, error) {
-	_, err := session.SetRequest("PUT", databaseName+"?partitioned="+fmt.Sprint(isPartitioned), nil).ExecuteRequest()
+	_, err := session.SetRequest("PUT", databaseName+"?partitioned="+fmt.Sprint(isPartitioned), nil).Do()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
@@ -186,8 +201,8 @@ func (session *Session) CreateDatabase(databaseName string, isPartitioned bool) 
 	return db, nil
 }
 
-func (database *Database) CreateDocument(jsonData []byte) (map[string]interface{}, error) {
-	res, err := database.Session.SetRequest("POST", database.Name, jsonData).ExecuteRequest()
+func (database *Database) Insert(jsonData []byte) (map[string]interface{}, error) {
+	res, err := database.Session.SetRequest("POST", database.Name, jsonData).Do()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
@@ -195,8 +210,8 @@ func (database *Database) CreateDocument(jsonData []byte) (map[string]interface{
 	return res.JsonMap, nil
 }
 
-func (database *Database) ReadDocument(_id string) (map[string]interface{}, error) {
-	res, err := database.Session.SetRequest("GET", database.Name+"/"+_id, nil).ExecuteRequest()
+func (database *Database) Read(_id string) (map[string]interface{}, error) {
+	res, err := database.Session.SetRequest("GET", database.Name+"/"+_id, nil).Do()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
@@ -204,14 +219,23 @@ func (database *Database) ReadDocument(_id string) (map[string]interface{}, erro
 	return res.JsonMap, nil
 }
 
-func (database *Database) UpdateDocument(jsonData []byte) (map[string]interface{}, error) {
-	_id := "" //Todo: Get ID from jsonData
-	_rev, err := database.ReadDocument(_id)
+func (database *Database) Copy(_id string) (map[string]interface{}, error) {
+	res, err := database.Session.SetRequest("COPY", database.Name+"/"+_id, nil).Do()
+	if err != nil {
+		log.Println(err.Error())
+		return nil, err
+	}
+	return res.JsonMap, nil
+}
+
+func (database *Database) Update(_id string, jsonData []byte) (map[string]interface{}, error) {
+	document, err := database.Read(_id)
+	_rev := document["_rev"].(string)
 	if err != nil {
 		log.Println(err.Error())
 		panic(err)
 	}
-	res, err := database.Session.SetRequest("PUT", database.Name+"/"+_id+"?rev="+_rev["_rev"].(string), jsonData).ExecuteRequest()
+	res, err := database.Session.SetRequest("PUT", database.Name+"/"+_id+"?rev="+_rev, jsonData).Do()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
@@ -219,16 +243,34 @@ func (database *Database) UpdateDocument(jsonData []byte) (map[string]interface{
 	return res.JsonMap, nil
 }
 
-func (database *Database) DeleteDocument(_id string) (map[string]interface{}, error) {
-	_rev, err := database.ReadDocument(_id)
+func (database *Database) Delete(_id string) (map[string]interface{}, error) {
+	_rev, err := database.Read(_id)
 	if err != nil {
 		log.Println(err.Error())
 		panic(err)
 	}
-	res, err := database.Session.SetRequest("DELETE", database.Name+"/"+_id+"?rev="+_rev["_rev"].(string), nil).ExecuteRequest()
+	res, err := database.Session.SetRequest("DELETE", database.Name+"/"+_id+"?rev="+_rev["_rev"].(string), nil).Do()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
 	}
 	return res.JsonMap, nil
+}
+
+type UploadRequest struct {
+	ID          string       `json:"_id"`
+	Title       string       `json:"title"`
+	Description string       `json:"description"`
+	Date        string       `json:"date"`
+	Time        string       `json:"time"`
+	Attachments []Attachment `json:"_attachments"`
+}
+
+type Attachment struct {
+	ContentType string `json:"content_type"`
+	Data        []byte `json:"data"`
+}
+
+func (database *Database) Upload(_id string, file os.File) {
+
 }
