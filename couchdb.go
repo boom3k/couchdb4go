@@ -12,8 +12,34 @@ import (
 )
 
 func main() {
+	type User struct {
+		Id   string `json:"_id"`
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
 	couch := NewSession("root", "boomer", "10.0.0.51", false)
-	couch.CreateDatabase("dev", true)
+	database, err := couch.GetDatabase("dev")
+	if err != nil {
+		log.Println(err.Error())
+		panic(err)
+	}
+
+	userData, err := json.Marshal(&User{Id: "user:rhenderson", Age: 0})
+	database.UpdateDocument(userData)
+	/*userData, err := json.Marshal(&User{Id: "user:rhenderson", Name: "Ramel", Age: 35})
+	if err != nil {
+		log.Println(err.Error())
+		panic(err)
+	}
+
+	document, err := database.CreateDocument(userData)
+	if err != nil {
+		log.Println(err.Error())
+		panic(err)
+	}
+	u := &User{}
+	mapstructure.Decode(document, &u)
+	fmt.Sprint(u)*/
 }
 
 func ExecuteURL(method, username, password, url string, body []byte) (*http.Response, error) {
@@ -78,10 +104,20 @@ type Database struct {
 	Session *Session
 }
 
-func (database *Database) GetDatabase(databaseName string, session *Session) *Database {
-	database.Name = databaseName
-	database.Session = session
-	return database
+func (session *Session) GetDatabase(databaseName string) (*Database, error) {
+	database := &Database{Name: databaseName, Session: session}
+	response, err := ExecuteURL("GET", session.Username, session.Password, session.ServerAddress+database.Name, nil)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	if response.StatusCode != 200 {
+		e := errors.New(response.Status + " - " + response.Request.URL.String())
+		return nil, e
+	}
+
+	return database, nil
 }
 
 type Res struct {
@@ -107,7 +143,7 @@ func GetResponse(response *http.Response) *Res {
 	return cr
 }
 
-func (session *Session) Do() (*Res, error) {
+func (session *Session) ExecuteRequest() (*Res, error) {
 	session.RequestHandler.SetBasicAuth(session.Username, session.Password)
 	session.RequestHandler.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	buffer := new(bytes.Buffer)
@@ -139,18 +175,19 @@ func (session *Session) SetRequest(method, ask string, body []byte) *Session {
 }
 
 func (session *Session) CreateDatabase(databaseName string, isPartitioned bool) (*Database, error) {
-	_, err := session.SetRequest("PUT", databaseName+"?partitioned="+fmt.Sprint(isPartitioned), nil).Do()
+	_, err := session.SetRequest("PUT", databaseName+"?partitioned="+fmt.Sprint(isPartitioned), nil).ExecuteRequest()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
 	}
 	db := &Database{}
-	db.GetDatabase(databaseName, session)
+	db.Name = databaseName
+	db.Session = session
 	return db, nil
 }
 
 func (database *Database) CreateDocument(jsonData []byte) (map[string]interface{}, error) {
-	res, err := database.Session.SetRequest("POST", database.Name, jsonData).Do()
+	res, err := database.Session.SetRequest("POST", database.Name, jsonData).ExecuteRequest()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
@@ -159,7 +196,7 @@ func (database *Database) CreateDocument(jsonData []byte) (map[string]interface{
 }
 
 func (database *Database) ReadDocument(_id string) (map[string]interface{}, error) {
-	res, err := database.Session.SetRequest("GET", database.Name+"/"+_id, nil).Do()
+	res, err := database.Session.SetRequest("GET", database.Name+"/"+_id, nil).ExecuteRequest()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
@@ -167,13 +204,14 @@ func (database *Database) ReadDocument(_id string) (map[string]interface{}, erro
 	return res.JsonMap, nil
 }
 
-func (database *Database) UpdateDocument(_id string, jsonData []byte) (map[string]interface{}, error) {
+func (database *Database) UpdateDocument(jsonData []byte) (map[string]interface{}, error) {
+	_id := "" //Todo: Get ID from jsonData
 	_rev, err := database.ReadDocument(_id)
 	if err != nil {
 		log.Println(err.Error())
 		panic(err)
 	}
-	res, err := database.Session.SetRequest("PUT", database.Name+"/"+_id+"?rev="+_rev["_rev"].(string), jsonData).Do()
+	res, err := database.Session.SetRequest("PUT", database.Name+"/"+_id+"?rev="+_rev["_rev"].(string), jsonData).ExecuteRequest()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
@@ -187,7 +225,7 @@ func (database *Database) DeleteDocument(_id string) (map[string]interface{}, er
 		log.Println(err.Error())
 		panic(err)
 	}
-	res, err := database.Session.SetRequest("DELETE", database.Name+"/"+_id+"?rev="+_rev["_rev"].(string), nil).Do()
+	res, err := database.Session.SetRequest("DELETE", database.Name+"/"+_id+"?rev="+_rev["_rev"].(string), nil).ExecuteRequest()
 	if err != nil {
 		log.Println(err.Error())
 		return nil, err
